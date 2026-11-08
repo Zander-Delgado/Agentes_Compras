@@ -5,11 +5,11 @@ from google import genai
 from google.genai import types
 
 class CentralComprasAI:
-    def __init__(self, api_key: str, modelo: str = "gemini-3.8-flash"):
+    def __init__(self, api_key: str, modelo: str = "gemini-2.5-flash"):
         self.client = genai.Client(api_key=api_key)
         self.modelo = modelo
 
-    def _invocar_gemini_json(self, system_prompt: str, contents_input, max_intentos: int = 4):
+    def _invocar_gemini_json(self, system_prompt: str, contents_input, max_intentos: int = 3):
         for i in range(max_intentos):
             try:
                 response = self.client.models.generate_content(
@@ -22,8 +22,9 @@ class CentralComprasAI:
                 )
                 return json.loads(response.text)
             except Exception as e:
-                if i < max_intentos - 1:
-                    time.sleep(5)
+                # Si topa cuota 429, espera 6 segundos antes de reintentar
+                if "429" in str(e) or i < max_intentos - 1:
+                    time.sleep(6)
                 else:
                     raise e
 
@@ -49,6 +50,8 @@ class CentralComprasAI:
         ).reset_index()
         resumen_demanda["Volumen_Total_TM"] = resumen_demanda["Volumen_Total_KG"] / 1000
 
+        time.sleep(2)  # Pausa preventiva de cuota
+
         # 2. Agente Estratega
         df_hist = pd.DataFrame(data_historica)
         prompt_agente2 = """
@@ -61,6 +64,8 @@ class CentralComprasAI:
         ctx_estratega = f"DEMANDA:\n{resumen_demanda[['producto_estandarizado', 'Volumen_Total_TM']].to_string(index=False)}\nHISTÓRICO:\n{df_hist.to_string(index=False)}"
         estrategia_json = self._invocar_gemini_json(prompt_agente2, ctx_estratega)
         df_estrategia = pd.DataFrame(estrategia_json)
+
+        time.sleep(2)  # Pausa preventiva de cuota
 
         # 3. Agente Evaluador de Proformas y Auditor Contractual
         prompt_agente3 = """
@@ -110,6 +115,8 @@ class CentralComprasAI:
 
         proformas_json = self._invocar_gemini_json(prompt_agente3, ctx_evaluador)
         df_proformas = pd.DataFrame(proformas_json)
+
+        time.sleep(2)  # Pausa preventiva de cuota
 
         # 4. Agente Orquestador (TCO y Dictamen Legal)
         prompt_agente4 = """
