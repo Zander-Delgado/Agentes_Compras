@@ -11,7 +11,6 @@ st.set_page_config(
 st.title("🌾 Central de Compras & Licitaciones Agroindustriales")
 st.markdown("Automatización de compras consolidadas con agentes IA usando Google Gemini.")
 
-# 1. Detección automática de API Key (Secrets de la nube o entrada manual)
 api_key_secret = st.secrets.get("GEMINI_API_KEY", "")
 
 with st.sidebar:
@@ -21,20 +20,19 @@ with st.sidebar:
         st.success("🔒 Conexión segura con Gemini activa")
     else:
         api_key = st.text_input("Gemini API Key", type="password", help="Ingresa tu clave de Google AI Studio")
-
+    
     modelo_seleccionado = st.selectbox(
         "Modelo de Gemini",
         ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"],
         index=0
     )
     st.markdown("---")
-    st.markdown("💡 **Flujo:**\n1. Normaliza demanda.\n2. Aplica techos PPP.\n3. Homologa proformas.\n4. Adjudica y audita ahorros.")
+    st.markdown("💡 **Flujo:**\n1. Normaliza demanda.\n2. Aplica techos PPP.\n3. Homologa proformas (Texto/PDF).\n4. Adjudica y audita ahorros.")
 
-# Pestañas de entrada
 tab_demanda, tab_historico, tab_ofertas = st.tabs([
-    "1. Pedidos (WhatsApp / Texto)",
-    "2. Precios Históricos (PPP)",
-    "3. Cotizaciones de Proveedores"
+    "1. Pedidos (WhatsApp / Texto)", 
+    "2. Precios Históricos (PPP)", 
+    "3. Cotizaciones (PDF o Texto)"
 ])
 
 with tab_demanda:
@@ -55,8 +53,21 @@ with tab_historico:
 
 with tab_ofertas:
     st.subheader("Cotizaciones Recibidas")
-    st.caption("Nota: Más adelante esta sección admitirá subida directa de archivos PDF.")
-    default_ofertas = """PROVEEDOR A (Molinos & Fertilizantes del Perú):
+    
+    col_pdf, col_txt = st.columns([1, 1])
+    with col_pdf:
+        st.markdown("**Subir Proformas en PDF**")
+        uploaded_pdfs = st.file_uploader(
+            "Carga uno o más archivos PDF de proveedores", 
+            type=["pdf"], 
+            accept_multiple_files=True
+        )
+        if uploaded_pdfs:
+            st.info(f"📄 {len(uploaded_pdfs)} archivo(s) PDF cargado(s) para análisis.")
+            
+    with col_txt:
+        st.markdown("**O pegar proformas en texto:**")
+        default_ofertas = """PROVEEDOR A (Molinos & Fertilizantes del Perú):
 - Urea 46%: $22.50 USD por bolsa de 50 kg. Pago contado. Entrega en su local.
 - Sulfato de Potasio: $890 USD/TM puesto en almacén. Contado.
 
@@ -64,26 +75,35 @@ PROVEEDOR B (Yara Distribución / Yara Perú):
 - Urea 46%: $465 USD por Tonelada Métrica. Crédito 30 días. Despacho incluido.
 - Nitrato de Amonio: $498 USD por Tonelada Métrica. Crédito 30 días.
 - Fosfato Diamónico: $660 USD por TM. Crédito 30 días."""
-    ofertas_input = st.text_area("Proformas de proveedores:", value=default_ofertas, height=160)
+        ofertas_input = st.text_area("Texto de proformas:", value=default_ofertas, height=140)
 
 st.markdown("---")
 
-# Botón de ejecución
 if st.button("🚀 Ejecutar Pipeline de Licitación", type="primary", use_container_width=True):
     if not api_key:
-        st.error("⚠️ No se encontró una Gemini API Key configurada. Ingrésala en la barra lateral o en Secrets.")
+        st.error("⚠️ No se encontró una Gemini API Key configurada.")
     else:
-        with st.spinner("Los agentes están analizando y licitando la demanda..."):
+        with st.spinner("Los agentes están analizando documentos, proformas y licitando la demanda..."):
             try:
                 servicio = CentralComprasAI(api_key=api_key, modelo=modelo_seleccionado)
                 hist_dict = df_historico_input.to_dict(orient="list")
-
+                
+                # Procesar lista de PDFs cargados en memoria
+                lista_pdf_bytes = []
+                if uploaded_pdfs:
+                    for arch in uploaded_pdfs:
+                        lista_pdf_bytes.append({
+                            "nombre": arch.name,
+                            "bytes": arch.read()
+                        })
+                
                 reporte = servicio.ejecutar_licitacion_completa(
                     pedidos_crudos=pedidos_input,
                     data_historica=hist_dict,
-                    cotizaciones_crudas=ofertas_input
+                    cotizaciones_crudas=ofertas_input,
+                    archivos_pdf=lista_pdf_bytes
                 )
-
+                
                 ahorro = reporte["ahorro_total_usd"]
                 st.success("✅ Proceso completado exitosamente.")
                 col_metric, _ = st.columns([1, 2])
@@ -95,7 +115,7 @@ if st.button("🚀 Ejecutar Pipeline de Licitación", type="primary", use_contai
                     "📊 Estrategia de Precios",
                     "📦 Demanda Consolidada"
                 ])
-
+                
                 with res_tab1:
                     st.dataframe(reporte["adjudicacion"], use_container_width=True)
                     st.subheader("📧 Comunicación de Adjudicación")
