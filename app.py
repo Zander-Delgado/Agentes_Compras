@@ -11,9 +11,17 @@ st.set_page_config(
 st.title("🌾 Central de Compras & Licitaciones Agroindustriales")
 st.markdown("Automatización de compras consolidadas con agentes IA usando Google Gemini.")
 
+# 1. Detección automática de API Key (Secrets de la nube o entrada manual)
+api_key_secret = st.secrets.get("GEMINI_API_KEY", "")
+
 with st.sidebar:
     st.header("⚙️ Configuración")
-    api_key = st.text_input("Gemini API Key", type="password", help="Ingresa tu API Key de Google AI Studio")
+    if api_key_secret:
+        api_key = api_key_secret
+        st.success("🔒 Conexión segura con Gemini activa")
+    else:
+        api_key = st.text_input("Gemini API Key", type="password", help="Ingresa tu clave de Google AI Studio")
+
     modelo_seleccionado = st.selectbox(
         "Modelo de Gemini",
         ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"],
@@ -22,6 +30,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("💡 **Flujo:**\n1. Normaliza demanda.\n2. Aplica techos PPP.\n3. Homologa proformas.\n4. Adjudica y audita ahorros.")
 
+# Pestañas de entrada
 tab_demanda, tab_historico, tab_ofertas = st.tabs([
     "1. Pedidos (WhatsApp / Texto)",
     "2. Precios Históricos (PPP)",
@@ -59,9 +68,10 @@ PROVEEDOR B (Yara Distribución / Yara Perú):
 
 st.markdown("---")
 
+# Botón de ejecución
 if st.button("🚀 Ejecutar Pipeline de Licitación", type="primary", use_container_width=True):
     if not api_key:
-        st.error("⚠️ Por favor ingresa tu API Key de Gemini en la barra lateral izquierda.")
+        st.error("⚠️ No se encontró una Gemini API Key configurada. Ingrésala en la barra lateral o en Secrets.")
     else:
         with st.spinner("Los agentes están analizando y licitando la demanda..."):
             try:
