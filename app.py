@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("🌾 Central de Compras & Licitaciones Agroindustriales")
-st.markdown("Automatización de compras consolidadas con agentes IA usando Google Gemini.")
+st.markdown("Automatización de compras consolidadas con análisis de TCO, penalidades y riesgos contractuales.")
 
 api_key_secret = st.secrets.get("GEMINI_API_KEY", "")
 
@@ -28,7 +28,7 @@ with st.sidebar:
         index=0
     )
     st.markdown("---")
-    st.markdown("💡 **Flujo:**\n1. Normaliza demanda.\n2. Aplica techos PPP.\n3. Homologa proformas (PDF/Excel/Texto).\n4. Adjudica y audita ahorros.")
+    st.markdown("💡 **Flujo con Auditoría TCO:**\n1. Normaliza demanda agregada.\n2. Fija techos PPP.\n3. Audita precios, penalidades y logística.\n4. Adjudica por TCO y redacta blindaje legal.")
 
 tab_demanda, tab_historico, tab_ofertas = st.tabs([
     "1. Pedidos (WhatsApp / Texto)", 
@@ -53,13 +53,13 @@ with tab_historico:
     df_historico_input = st.data_editor(default_hist, num_rows="dynamic", use_container_width=True)
 
 with tab_ofertas:
-    st.subheader("Cotizaciones Recibidas")
+    st.subheader("Cotizaciones y Cláusulas Recibidas")
     col_files, col_txt = st.columns([1, 1])
     
     with col_files:
-        st.markdown("**Subir Archivos (PDF o Excel)**")
+        st.markdown("**Subir Archivos (PDF o Excel con hojas contractuales)**")
         uploaded_files = st.file_uploader(
-            "Carga proformas en PDF o listas de precios en Excel (.xlsx, .xls)", 
+            "Carga proformas en PDF o archivos Excel (.xlsx, .xls)", 
             type=["pdf", "xlsx", "xls"], 
             accept_multiple_files=True
         )
@@ -67,24 +67,32 @@ with tab_ofertas:
             st.info(f"📂 {len(uploaded_files)} archivo(s) seleccionado(s).")
 
     with col_txt:
-        st.markdown("**O pegar cotizaciones en texto plano:**")
+        st.markdown("**O pegar cotizaciones y términos en texto:**")
         default_ofertas = """PROVEEDOR A (Molinos & Fertilizantes del Perú):
-- Urea 46%: $22.50 USD por bolsa de 50 kg. Pago contado. Entrega en su local.
+- Urea 46%: $458 USD/TM puesto en almacén. Pago contado anticipado.
 - Sulfato de Potasio: $890 USD/TM puesto en almacén. Contado.
+CLÁUSULAS ADICIONALES:
+* Penalidad: Cobro de $150 USD por día de sobrestadía si el camión espera más de 2 horas para descargar en fundo.
+* Tolerancia de merma: Máximo 0.5% reconocida por el proveedor.
+* Vigencia: 48 horas calendario.
 
 PROVEEDOR B (Yara Distribución / Yara Perú):
 - Urea 46%: $465 USD por Tonelada Métrica. Crédito 30 días. Despacho incluido.
 - Nitrato de Amonio: $498 USD por Tonelada Métrica. Crédito 30 días.
-- Fosfato Diamónico: $660 USD por TM. Crédito 30 días."""
-        ofertas_input = st.text_area("Texto de proformas:", value=default_ofertas, height=140)
+- Fosfato Diamónico: $660 USD por TM. Crédito 30 días.
+CLÁUSULAS ADICIONALES:
+* Logística: Entrega en tolvas o bolsas de 50kg en 4 días hábiles.
+* Penalidades: Sin cobro por tiempos de espera de descarga razonables (hasta 6 horas).
+* Vigencia: 15 días calendario."""
+        ofertas_input = st.text_area("Texto de proformas y términos:", value=default_ofertas, height=180)
 
 st.markdown("---")
 
-if st.button("🚀 Ejecutar Pipeline de Licitación", type="primary", use_container_width=True):
+if st.button("🚀 Ejecutar Pipeline de Licitación con Análisis TCO", type="primary", use_container_width=True):
     if not api_key:
         st.error("⚠️ No se encontró una Gemini API Key configurada.")
     else:
-        with st.spinner("Los agentes están leyendo documentos (PDF/Excel), homologando unidades y licitando..."):
+        with st.spinner("Analizando precios, detectando penalidades y auditando condiciones contractuales..."):
             try:
                 servicio = CentralComprasAI(api_key=api_key, modelo=modelo_seleccionado)
                 hist_dict = df_historico_input.to_dict(orient="list")
@@ -101,7 +109,6 @@ if st.button("🚀 Ejecutar Pipeline de Licitación", type="primary", use_contai
                                 "bytes": arch.read()
                             })
                         elif nombre.endswith((".xlsx", ".xls")):
-                            # Leer todas las hojas del Excel y transformarlas en texto estructurado
                             excel_bytes = io.BytesIO(arch.read())
                             xls = pd.ExcelFile(excel_bytes)
                             texto_acumulado_excel += f"\n--- ARCHIVO EXCEL: {arch.name} ---\n"
@@ -119,22 +126,24 @@ if st.button("🚀 Ejecutar Pipeline de Licitación", type="primary", use_contai
                 )
                 
                 ahorro = reporte["ahorro_total_usd"]
-                st.success("✅ Proceso completado exitosamente.")
-                col_metric, _ = st.columns([1, 2])
+                st.success("✅ Licitación y análisis de riesgos completados exitosamente.")
+                
+                col_metric, col_riesgo = st.columns([1, 2])
                 col_metric.metric("Ahorro Total Consolidado", f"${ahorro:,.2f} USD")
+                col_riesgo.info(f"🛡️ **Dictamen de Riesgo Global:**\n{reporte['dictamen_riesgo']}")
 
                 res_tab1, res_tab2, res_tab3, res_tab4 = st.tabs([
-                    "🏆 Adjudicación Final",
-                    "📑 Comparativo de Proformas",
-                    "📊 Estrategia de Precios",
+                    "🏆 Adjudicación y Blindaje O.C.",
+                    "📑 Matriz de Proformas, Penalidades y Logística",
+                    "📊 Estrategia de Precios Techo",
                     "📦 Demanda Consolidada"
                 ])
                 
                 with res_tab1:
                     st.dataframe(reporte["adjudicacion"], use_container_width=True)
-                    st.subheader("📧 Comunicación de Adjudicación")
+                    st.subheader("📧 Comunicación de Adjudicación y Condiciones")
                     st.text_input("Asunto:", value=reporte["comunicacion_cierre"]["asunto"], disabled=True)
-                    st.text_area("Cuerpo del Correo:", value=reporte["comunicacion_cierre"]["cuerpo_correo"], height=160)
+                    st.text_area("Cuerpo del Correo / O.C.:", value=reporte["comunicacion_cierre"]["cuerpo_correo"], height=180)
 
                 with res_tab2:
                     st.dataframe(reporte["cuadro_comparativo"], use_container_width=True)
