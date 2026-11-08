@@ -1,3 +1,4 @@
+import io
 import streamlit as st
 import pandas as pd
 from central_compras import CentralComprasAI
@@ -27,12 +28,12 @@ with st.sidebar:
         index=0
     )
     st.markdown("---")
-    st.markdown("💡 **Flujo:**\n1. Normaliza demanda.\n2. Aplica techos PPP.\n3. Homologa proformas (Texto/PDF).\n4. Adjudica y audita ahorros.")
+    st.markdown("💡 **Flujo:**\n1. Normaliza demanda.\n2. Aplica techos PPP.\n3. Homologa proformas (PDF/Excel/Texto).\n4. Adjudica y audita ahorros.")
 
 tab_demanda, tab_historico, tab_ofertas = st.tabs([
     "1. Pedidos (WhatsApp / Texto)", 
     "2. Precios Históricos (PPP)", 
-    "3. Cotizaciones (PDF o Texto)"
+    "3. Cotizaciones (PDF / Excel / Texto)"
 ])
 
 with tab_demanda:
@@ -53,20 +54,20 @@ with tab_historico:
 
 with tab_ofertas:
     st.subheader("Cotizaciones Recibidas")
+    col_files, col_txt = st.columns([1, 1])
     
-    col_pdf, col_txt = st.columns([1, 1])
-    with col_pdf:
-        st.markdown("**Subir Proformas en PDF**")
-        uploaded_pdfs = st.file_uploader(
-            "Carga uno o más archivos PDF de proveedores", 
-            type=["pdf"], 
+    with col_files:
+        st.markdown("**Subir Archivos (PDF o Excel)**")
+        uploaded_files = st.file_uploader(
+            "Carga proformas en PDF o listas de precios en Excel (.xlsx, .xls)", 
+            type=["pdf", "xlsx", "xls"], 
             accept_multiple_files=True
         )
-        if uploaded_pdfs:
-            st.info(f"📄 {len(uploaded_pdfs)} archivo(s) PDF cargado(s) para análisis.")
-            
+        if uploaded_files:
+            st.info(f"📂 {len(uploaded_files)} archivo(s) seleccionado(s).")
+
     with col_txt:
-        st.markdown("**O pegar proformas en texto:**")
+        st.markdown("**O pegar cotizaciones en texto plano:**")
         default_ofertas = """PROVEEDOR A (Molinos & Fertilizantes del Perú):
 - Urea 46%: $22.50 USD por bolsa de 50 kg. Pago contado. Entrega en su local.
 - Sulfato de Potasio: $890 USD/TM puesto en almacén. Contado.
@@ -83,25 +84,38 @@ if st.button("🚀 Ejecutar Pipeline de Licitación", type="primary", use_contai
     if not api_key:
         st.error("⚠️ No se encontró una Gemini API Key configurada.")
     else:
-        with st.spinner("Los agentes están analizando documentos, proformas y licitando la demanda..."):
+        with st.spinner("Los agentes están leyendo documentos (PDF/Excel), homologando unidades y licitando..."):
             try:
                 servicio = CentralComprasAI(api_key=api_key, modelo=modelo_seleccionado)
                 hist_dict = df_historico_input.to_dict(orient="list")
                 
-                # Procesar lista de PDFs cargados en memoria
                 lista_pdf_bytes = []
-                if uploaded_pdfs:
-                    for arch in uploaded_pdfs:
-                        lista_pdf_bytes.append({
-                            "nombre": arch.name,
-                            "bytes": arch.read()
-                        })
+                texto_acumulado_excel = ""
                 
+                if uploaded_files:
+                    for arch in uploaded_files:
+                        nombre = arch.name.lower()
+                        if nombre.endswith(".pdf"):
+                            lista_pdf_bytes.append({
+                                "nombre": arch.name,
+                                "bytes": arch.read()
+                            })
+                        elif nombre.endswith((".xlsx", ".xls")):
+                            # Leer todas las hojas del Excel y transformarlas en texto estructurado
+                            excel_bytes = io.BytesIO(arch.read())
+                            xls = pd.ExcelFile(excel_bytes)
+                            texto_acumulado_excel += f"\n--- ARCHIVO EXCEL: {arch.name} ---\n"
+                            for sheet_name in xls.sheet_names:
+                                df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
+                                texto_acumulado_excel += f"[Hoja: {sheet_name}]\n"
+                                texto_acumulado_excel += df_sheet.to_string(index=False) + "\n"
+
                 reporte = servicio.ejecutar_licitacion_completa(
                     pedidos_crudos=pedidos_input,
                     data_historica=hist_dict,
                     cotizaciones_crudas=ofertas_input,
-                    archivos_pdf=lista_pdf_bytes
+                    archivos_pdf=lista_pdf_bytes,
+                    datos_excel=texto_acumulado_excel
                 )
                 
                 ahorro = reporte["ahorro_total_usd"]

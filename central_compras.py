@@ -27,7 +27,7 @@ class CentralComprasAI:
                 else:
                     raise e
 
-    def ejecutar_licitacion_completa(self, pedidos_crudos: str, data_historica: dict, cotizaciones_crudas: str = "", archivos_pdf: list = None):
+    def ejecutar_licitacion_completa(self, pedidos_crudos: str, data_historica: dict, cotizaciones_crudas: str = "", archivos_pdf: list = None, datos_excel: str = ""):
         if archivos_pdf is None:
             archivos_pdf = []
 
@@ -62,11 +62,11 @@ class CentralComprasAI:
         estrategia_json = self._invocar_gemini_json(prompt_agente2, ctx_estratega)
         df_estrategia = pd.DataFrame(estrategia_json)
 
-        # 3. Agente Evaluador (Multimodal: texto y/o PDFs)
+        # 3. Agente Evaluador (Multimodal: Texto, Excel y/o PDFs)
         prompt_agente3 = """
-        Eres el Agente Evaluador de Proformas. Analiza cotizaciones de fertilizantes (desde texto o documentos PDF adjuntos):
+        Eres el Agente Evaluador de Proformas. Analiza cotizaciones de fertilizantes (desde texto, tablas extraídas de Excel o documentos PDF adjuntos):
         - Extrae proveedor, productos, precios, plazos y condiciones comerciales.
-        - Homogeniza todo precio a 'precio_ofertado_usd_tm' (si es saco 50kg en USD, multiplica por 20).
+        - Homogeniza todo precio a 'precio_ofertado_usd_tm' (si es saco 50kg en USD, multiplica por 20; si ya viene en USD/TM úsalo directo).
         - Evalúa si el precio es ADMISIBLE o FUERA DE RANGO contra el precio techo.
         - Calcula la desviación porcentual contra el techo: ((precio_ofertado - precio_techo) / precio_techo) * 100.
         Responde ÚNICAMENTE un array JSON con claves:
@@ -80,7 +80,10 @@ class CentralComprasAI:
         if cotizaciones_crudas.strip():
             ctx_evaluador.append(f"\nCOTIZACIONES EN TEXTO:\n{cotizaciones_crudas}")
             
-        for idx, pdf in enumerate(archivos_pdf):
+        if datos_excel.strip():
+            ctx_evaluador.append(f"\nCOTIZACIONES EXTRAÍDAS DE ARCHIVOS EXCEL:\n{datos_excel}")
+
+        for pdf in archivos_pdf:
             ctx_evaluador.append(types.Part.from_bytes(data=pdf["bytes"], mime_type="application/pdf"))
 
         proformas_json = self._invocar_gemini_json(prompt_agente3, ctx_evaluador)
