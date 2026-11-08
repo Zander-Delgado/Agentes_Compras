@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("🌾 Central de Compras & Licitaciones Agroindustriales")
-st.markdown("Automatización de compras consolidadas con análisis de TCO, penalidades y riesgos contractuales.")
+st.markdown("Automatización de compras consolidadas con auditoría de TCO, mitigación de riesgos y arquitectura optimizada en tokens.")
 
 api_key_secret = st.secrets.get("GEMINI_API_KEY", "")
 
@@ -24,11 +24,11 @@ with st.sidebar:
     
     modelo_seleccionado = st.selectbox(
         "Modelo de Gemini",
-        ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"],
+        ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.8-flash"],
         index=0
     )
     st.markdown("---")
-    st.markdown("💡 **Flujo con Auditoría TCO:**\n1. Normaliza demanda agregada.\n2. Fija techos PPP.\n3. Audita precios, penalidades y logística.\n4. Adjudica por TCO y redacta blindaje legal.")
+    st.markdown("💡 **Optimizaciones activas:**\n- Structured Outputs (Pydantic)\n- Pipe Serialization (`|`)\n- Filtrado previo de tablas\n- Auditoría TCO & Penalidades")
 
 tab_demanda, tab_historico, tab_ofertas = st.tabs([
     "1. Pedidos (WhatsApp / Texto)", 
@@ -92,7 +92,7 @@ if st.button("🚀 Ejecutar Pipeline de Licitación con Análisis TCO", type="pr
     if not api_key:
         st.error("⚠️ No se encontró una Gemini API Key configurada.")
     else:
-        with st.spinner("Analizando precios, detectando penalidades y auditando condiciones contractuales..."):
+        with st.spinner("Analizando con pipeline optimizado en tokens y evaluando TCO..."):
             try:
                 servicio = CentralComprasAI(api_key=api_key, modelo=modelo_seleccionado)
                 hist_dict = df_historico_input.to_dict(orient="list")
@@ -111,11 +111,14 @@ if st.button("🚀 Ejecutar Pipeline de Licitación con Análisis TCO", type="pr
                         elif nombre.endswith((".xlsx", ".xls")):
                             excel_bytes = io.BytesIO(arch.read())
                             xls = pd.ExcelFile(excel_bytes)
-                            texto_acumulado_excel += f"\n--- ARCHIVO EXCEL: {arch.name} ---\n"
                             for sheet_name in xls.sheet_names:
                                 df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
-                                texto_acumulado_excel += f"[Hoja: {sheet_name}]\n"
-                                texto_acumulado_excel += df_sheet.to_string(index=False) + "\n"
+                                # Poda de tokens: eliminar filas y columnas totalmente vacías
+                                df_sheet = df_sheet.dropna(how="all").dropna(axis=1, how="all")
+                                if not df_sheet.empty:
+                                    texto_acumulado_excel += f"[Hoja:{sheet_name}]\n"
+                                    # Serialización compacta delimitada por pipe
+                                    texto_acumulado_excel += df_sheet.to_csv(index=False, sep="|") + "\n"
 
                 reporte = servicio.ejecutar_licitacion_completa(
                     pedidos_crudos=pedidos_input,
@@ -126,10 +129,12 @@ if st.button("🚀 Ejecutar Pipeline de Licitación con Análisis TCO", type="pr
                 )
                 
                 ahorro = reporte["ahorro_total_usd"]
+                tokens_usados = reporte.get("total_tokens_usados", 0)
                 st.success("✅ Licitación y análisis de riesgos completados exitosamente.")
                 
-                col_metric, col_riesgo = st.columns([1, 2])
+                col_metric, col_tokens, col_riesgo = st.columns([1, 1, 2])
                 col_metric.metric("Ahorro Total Consolidado", f"${ahorro:,.2f} USD")
+                col_tokens.metric("Tokens Consumidos", f"{tokens_usados:,}")
                 col_riesgo.info(f"🛡️ **Dictamen de Riesgo Global:**\n{reporte['dictamen_riesgo']}")
 
                 res_tab1, res_tab2, res_tab3, res_tab4 = st.tabs([

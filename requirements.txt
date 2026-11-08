@@ -2,3 +2,4 @@ google-genai
 pandas
 streamlit
 openpyxl
+pydantic
