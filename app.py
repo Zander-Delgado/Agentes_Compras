@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("🌾 Central de Compras & Licitaciones Agroindustriales")
-st.markdown("Automatización de compras consolidadas con auditoría de TCO, mitigación de riesgos y arquitectura optimizada en tokens.")
+st.markdown("Plataforma de compras consolidadas con homologación semántica de insumos, cálculo de PPP y auditoría de TCO.")
 
 api_key_secret = st.secrets.get("GEMINI_API_KEY", "")
 
@@ -28,11 +28,11 @@ with st.sidebar:
         index=0
     )
     st.markdown("---")
-    st.markdown("💡 **Optimizaciones activas:**\n- Structured Outputs (Pydantic)\n- Pipe Serialization (`|`)\n- Filtrado previo de tablas\n- Auditoría TCO & Penalidades")
+    st.markdown("💡 **Capacidades Activas:**\n- Ingesta de Histórico Excel y cálculo PPP\n- Homologación de sinónimos y códigos ERP\n- Auditoría de Penalidades y TCO\n- Optimización en Tokens")
 
 tab_demanda, tab_historico, tab_ofertas = st.tabs([
     "1. Pedidos (WhatsApp / Texto)", 
-    "2. Precios Históricos (PPP)", 
+    "2. Precios Históricos (PPP / Excel)", 
     "3. Cotizaciones (PDF / Excel / Texto)"
 ])
 
@@ -44,20 +44,50 @@ with tab_demanda:
     pedidos_input = st.text_area("Requerimientos crudos:", value=default_pedidos, height=140)
 
 with tab_historico:
-    st.subheader("Base de Referencia Histórica (USD/TM)")
-    default_hist = pd.DataFrame({
-        "producto": ["Urea Agrícola 46% N", "Sulfato de Potasio Soluble", "Nitrato de Amonio", "Fosfato Diamónico"],
-        "ppp_anterior_usd_tm": [480.0, 920.0, 510.0, 680.0],
-        "tendencia_mercado": ["A la baja", "Estable", "Alza moderada", "Estable"]
-    })
-    df_historico_input = st.data_editor(default_hist, num_rows="dynamic", use_container_width=True)
+    st.subheader("Base de Precios Promedio Ponderados (PPP)")
+    
+    col_hist_file, col_hist_info = st.columns([1, 1])
+    with col_hist_file:
+        uploaded_ppp = st.file_uploader(
+            "Cargar Excel de compras históricas del ERP (.xlsx)", 
+            type=["xlsx", "xls"],
+            help="Sube un archivo con columnas: Código, Producto/Descripción, Cantidad, Unidad y Precio/Total"
+        )
+    
+    with col_hist_info:
+        st.caption("ℹ️ El sistema calcula automáticamente el PPP en **USD/TM** ponderando volúmenes de compras pasadas y permite reconocer sinónimos comerciales en las proformas de proveedores.")
+
+    # Si el usuario sube su archivo histórico, calculamos el PPP con Pandas
+    if uploaded_ppp is not None:
+        try:
+            df_historico_calculado = CentralComprasAI.calcular_ppp_desde_excel(uploaded_ppp)
+            st.success("✅ Histórico procesado y PPP calculado exitosamente.")
+            df_historico_input = st.data_editor(df_historico_calculado, num_rows="dynamic", use_container_width=True)
+        except Exception as e:
+            st.warning(f"No se pudo estructurar automáticamente el archivo: {e}. Mostrando tabla estándar:")
+            default_hist = pd.DataFrame({
+                "codigo_erp": ["FERT-001", "FERT-002", "FERT-003", "FERT-004"],
+                "descripcion_historica": ["Urea Agrícola 46% N", "Sulfato de Potasio Soluble (SOP)", "Nitrato de Amonio Agrícola", "Fosfato Diamónico (DAP)"],
+                "volumen_historico_tm": [150.0, 45.0, 80.0, 60.0],
+                "ppp_anterior_usd_tm": [480.0, 920.0, 510.0, 680.0]
+            })
+            df_historico_input = st.data_editor(default_hist, num_rows="dynamic", use_container_width=True)
+    else:
+        # Tabla por defecto si no sube archivo
+        default_hist = pd.DataFrame({
+            "codigo_erp": ["FERT-001", "FERT-002", "FERT-003", "FERT-004"],
+            "descripcion_historica": ["Urea Agrícola 46% N", "Sulfato de Potasio Soluble (SOP)", "Nitrato de Amonio Agrícola", "Fosfato Diamónico (DAP)"],
+            "volumen_historico_tm": [150.0, 45.0, 80.0, 60.0],
+            "ppp_anterior_usd_tm": [480.0, 920.0, 510.0, 680.0]
+        })
+        df_historico_input = st.data_editor(default_hist, num_rows="dynamic", use_container_width=True)
 
 with tab_ofertas:
     st.subheader("Cotizaciones y Cláusulas Recibidas")
     col_files, col_txt = st.columns([1, 1])
     
     with col_files:
-        st.markdown("**Subir Archivos (PDF o Excel con hojas contractuales)**")
+        st.markdown("**Subir Archivos (PDF o Excel con proformas)**")
         uploaded_files = st.file_uploader(
             "Carga proformas en PDF o archivos Excel (.xlsx, .xls)", 
             type=["pdf", "xlsx", "xls"], 
@@ -69,17 +99,17 @@ with tab_ofertas:
     with col_txt:
         st.markdown("**O pegar cotizaciones y términos en texto:**")
         default_ofertas = """PROVEEDOR A (Molinos & Fertilizantes del Perú):
-- Urea 46%: $458 USD/TM puesto en almacén. Pago contado anticipado.
-- Sulfato de Potasio: $890 USD/TM puesto en almacén. Contado.
+- Urea perlada 46% granulada: $458 USD/TM puesto en almacén. Pago contado anticipado.
+- Muriato / Sulfato Potásico soluble: $890 USD/TM puesto en almacén. Contado.
 CLÁUSULAS ADICIONALES:
 * Penalidad: Cobro de $150 USD por día de sobrestadía si el camión espera más de 2 horas para descargar en fundo.
 * Tolerancia de merma: Máximo 0.5% reconocida por el proveedor.
 * Vigencia: 48 horas calendario.
 
 PROVEEDOR B (Yara Distribución / Yara Perú):
-- Urea 46%: $465 USD por Tonelada Métrica. Crédito 30 días. Despacho incluido.
-- Nitrato de Amonio: $498 USD por Tonelada Métrica. Crédito 30 días.
-- Fosfato Diamónico: $660 USD por TM. Crédito 30 días.
+- Urea agrícola estándar: $465 USD por Tonelada Métrica. Crédito 30 días. Despacho incluido.
+- Nitrato amónico: $498 USD por Tonelada Métrica. Crédito 30 días.
+- Fosfato diamónico 18-46-0 (DAP): $660 USD por TM. Crédito 30 días.
 CLÁUSULAS ADICIONALES:
 * Logística: Entrega en tolvas o bolsas de 50kg en 4 días hábiles.
 * Penalidades: Sin cobro por tiempos de espera de descarga razonables (hasta 6 horas).
@@ -88,11 +118,11 @@ CLÁUSULAS ADICIONALES:
 
 st.markdown("---")
 
-if st.button("🚀 Ejecutar Pipeline de Licitación con Análisis TCO", type="primary", use_container_width=True):
+if st.button("🚀 Ejecutar Pipeline de Licitación con Análisis TCO & PPP", type="primary", use_container_width=True):
     if not api_key:
         st.error("⚠️ No se encontró una Gemini API Key configurada.")
     else:
-        with st.spinner("Analizando con pipeline optimizado en tokens y evaluando TCO..."):
+        with st.spinner("Homologando sinónimos contra el histórico, auditando penalidades y calculando TCO..."):
             try:
                 servicio = CentralComprasAI(api_key=api_key, modelo=modelo_seleccionado)
                 hist_dict = df_historico_input.to_dict(orient="list")
@@ -113,11 +143,9 @@ if st.button("🚀 Ejecutar Pipeline de Licitación con Análisis TCO", type="pr
                             xls = pd.ExcelFile(excel_bytes)
                             for sheet_name in xls.sheet_names:
                                 df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
-                                # Poda de tokens: eliminar filas y columnas totalmente vacías
                                 df_sheet = df_sheet.dropna(how="all").dropna(axis=1, how="all")
                                 if not df_sheet.empty:
                                     texto_acumulado_excel += f"[Hoja:{sheet_name}]\n"
-                                    # Serialización compacta delimitada por pipe
                                     texto_acumulado_excel += df_sheet.to_csv(index=False, sep="|") + "\n"
 
                 reporte = servicio.ejecutar_licitacion_completa(
@@ -130,7 +158,7 @@ if st.button("🚀 Ejecutar Pipeline de Licitación con Análisis TCO", type="pr
                 
                 ahorro = reporte["ahorro_total_usd"]
                 tokens_usados = reporte.get("total_tokens_usados", 0)
-                st.success("✅ Licitación y análisis de riesgos completados exitosamente.")
+                st.success("✅ Licitación, homologación de catálogo y análisis de riesgos completados.")
                 
                 col_metric, col_tokens, col_riesgo = st.columns([1, 1, 2])
                 col_metric.metric("Ahorro Total Consolidado", f"${ahorro:,.2f} USD")
@@ -139,8 +167,8 @@ if st.button("🚀 Ejecutar Pipeline de Licitación con Análisis TCO", type="pr
 
                 res_tab1, res_tab2, res_tab3, res_tab4 = st.tabs([
                     "🏆 Adjudicación y Blindaje O.C.",
-                    "📑 Matriz de Proformas, Penalidades y Logística",
-                    "📊 Estrategia de Precios Techo",
+                    "📑 Matriz de Proformas y Homologación ERP",
+                    "📊 Estrategia de Precios Techo vs PPP",
                     "📦 Demanda Consolidada"
                 ])
                 
