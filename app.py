@@ -80,8 +80,27 @@ else:
     })
 
 with tab_demanda:
-    st.subheader(f"Demanda de {categoria_seleccionada}")
-    pedidos_input = st.text_area("Requerimientos crudos o consolidado de pedidos:", value=default_pedidos, height=140)
+    st.subheader(f"Demanda y Requerimientos ({categoria_seleccionada})")
+    col_demanda_file, col_demanda_txt = st.columns([1, 1])
+    
+    with col_demanda_file:
+        st.markdown("**Cargar Excel de Requerimientos / MRP**")
+        uploaded_demanda = st.file_uploader(
+            "Cargar consolidado o pedidos en Excel (.xlsx, .xls)",
+            type=["xlsx", "xls"],
+            key="demanda_uploader",
+            help="Sube un archivo con los requerimientos por planta, fundo o centro de costo"
+        )
+        if uploaded_demanda:
+            st.info(f"📂 Archivo de requerimientos cargado: `{uploaded_demanda.name}`")
+
+    with col_demanda_txt:
+        st.markdown("**O ingresar pedidos en texto / WhatsApp:**")
+        pedidos_input = st.text_area(
+            "Requerimientos informales (se ignora si subes un archivo Excel):", 
+            value=default_pedidos, 
+            height=140
+        )
 
 with tab_historico:
     st.subheader("Base de Precios Promedio Ponderados (PPP)")
@@ -137,10 +156,21 @@ if st.button(f"🚀 Ejecutar Licitación de {categoria_seleccionada}", type="pri
                 servicio = CentralComprasAI(api_key=api_key, categoria=categoria_seleccionada, modelo=modelo_seleccionado)
                 hist_dict = df_historico_input.to_dict(orient="list")
                 
+                # 1. Procesamiento de Demanda (Excel o Texto)
+                if uploaded_demanda is not None:
+                    excel_demanda_io = io.BytesIO(uploaded_demanda.read())
+                    xls_dem = pd.ExcelFile(excel_demanda_io)
+                    texto_demanda_final = f"REQUERIMIENTOS DESDE ARCHIVO EXCEL ({uploaded_demanda.name}):\n"
+                    for sheet in xls_dem.sheet_names:
+                        df_d = pd.read_excel(xls_dem, sheet_name=sheet).dropna(how="all").dropna(axis=1, how="all")
+                        if not df_d.empty:
+                            texto_demanda_final += f"[Hoja: {sheet}]\n" + df_d.to_csv(index=False, sep="|") + "\n"
+                else:
+                    texto_demanda_final = pedidos_input
+
+                # 2. Procesamiento de Cotizaciones (Archivos o Texto)
                 lista_pdf_bytes = []
                 texto_acumulado_excel = ""
-                
-                # Si sube archivos, usamos estrictamente los archivos para no mezclar con el texto por defecto
                 texto_ofertas_enviar = "" if uploaded_files else ofertas_input
                 
                 if uploaded_files:
@@ -152,53 +182,4 @@ if st.button(f"🚀 Ejecutar Licitación de {categoria_seleccionada}", type="pri
                                 "bytes": arch.read()
                             })
                         elif nombre.endswith((".xlsx", ".xls")):
-                            excel_bytes = io.BytesIO(arch.read())
-                            xls = pd.ExcelFile(excel_bytes)
-                            for sheet_name in xls.sheet_names:
-                                df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
-                                df_sheet = df_sheet.dropna(how="all").dropna(axis=1, how="all")
-                                if not df_sheet.empty:
-                                    texto_acumulado_excel += f"[Hoja:{sheet_name}]\n"
-                                    texto_acumulado_excel += df_sheet.to_csv(index=False, sep="|") + "\n"
-
-                reporte = servicio.ejecutar_licitacion_completa(
-                    pedidos_crudos=pedidos_input,
-                    data_historica=hist_dict,
-                    cotizaciones_crudas=texto_ofertas_enviar,
-                    archivos_pdf=lista_pdf_bytes,
-                    datos_excel=texto_acumulado_excel
-                )
-                
-                ahorro = reporte["ahorro_total_usd"]
-                tokens_usados = reporte.get("total_tokens_usados", 0)
-                st.success(f"✅ Licitación de {categoria_seleccionada} completada exitosamente.")
-                
-                col_metric, col_tokens, col_riesgo = st.columns([1, 1, 2])
-                col_metric.metric("Ahorro Total Consolidado", f"${ahorro:,.2f} USD")
-                col_tokens.metric("Tokens Consumidos", f"{tokens_usados:,}")
-                col_riesgo.info(f"🛡️ **Dictamen de Riesgo & TCO:**\n{reporte['dictamen_riesgo']}")
-
-                res_tab1, res_tab2, res_tab3, res_tab4 = st.tabs([
-                    "🏆 Adjudicación y Blindaje O.C.",
-                    "📑 Matriz de Proformas y Homologación ERP",
-                    "📊 Estrategia de Precios Techo vs PPP",
-                    "📦 Demanda Consolidada"
-                ])
-                
-                with res_tab1:
-                    st.dataframe(reporte["adjudicacion"], use_container_width=True)
-                    st.subheader("📧 Comunicación de Adjudicación y Condiciones")
-                    st.text_input("Asunto:", value=reporte["comunicacion_cierre"]["asunto"], disabled=True)
-                    st.text_area("Cuerpo del Correo / O.C.:", value=reporte["comunicacion_cierre"]["cuerpo_correo"], height=180)
-
-                with res_tab2:
-                    st.dataframe(reporte["cuadro_comparativo"], use_container_width=True)
-
-                with res_tab3:
-                    st.dataframe(reporte["estrategia_precios"], use_container_width=True)
-
-                with res_tab4:
-                    st.dataframe(reporte["demanda_consolidada"], use_container_width=True)
-
-            except Exception as e:
-                st.error(f"Error durante la ejecución del pipeline: {e}")
+                            excel_bytes = io.Bytes
