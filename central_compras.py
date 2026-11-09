@@ -2,12 +2,12 @@ import io
 import time
 import json
 import pandas as pd
-from typing import List, Optional
+from typing import List
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
-# --- Esquemas Pydantic Estructurados ---
+# --- Modelos Pydantic Estrictos ---
 
 class ItemDemanda(BaseModel):
     agricultor: str = Field(description="Nombre del productor o fundo")
@@ -20,8 +20,11 @@ class ItemDemanda(BaseModel):
     unidad_original: str
     volumen_total_kg: float
 
+class ListaDemanda(BaseModel):
+    pedidos: List[ItemDemanda]
+
 class ItemEstrategia(BaseModel):
-    codigo_historico: Optional[str] = Field(default="N/A", description="Código de artículo histórico del ERP")
+    codigo_historico: str = Field(default="N/A", description="Código de artículo histórico del ERP")
     producto: str
     concentracion: str
     volumen_tm: float
@@ -31,17 +34,20 @@ class ItemEstrategia(BaseModel):
     estrategia_sourcing: str
     argumento_negociacion: str
 
+class ListaEstrategia(BaseModel):
+    estrategias: List[ItemEstrategia]
+
 class ItemOfertaEvaluada(BaseModel):
     proveedor: str
     producto: str
-    codigo_erp_mapeado: Optional[str] = Field(default="N/A", description="Código de material reconocido del ERP")
-    producto_historico_relacionado: Optional[str] = Field(default="", description="Descripción histórica asociada")
+    codigo_erp_mapeado: str = Field(default="N/A", description="Código de material reconocido del ERP")
+    producto_historico_relacionado: str = Field(default="", description="Descripción histórica asociada")
     concentracion_detectada: str
     presentacion_cotizada: str
     precio_original_cotizado: str
     precio_ofertado_usd_tm: float
     precio_techo_referencia_usd_tm: float
-    desviacion_vs_techo_pct: float = Field(alias="desviacion_vs_techo_%")
+    desviacion_vs_techo_pct: float
     estado_precio: str
     condiciones_pago: str
     lugar_entrega: str
@@ -49,6 +55,9 @@ class ItemOfertaEvaluada(BaseModel):
     penalidades_y_moras: str
     restricciones_logisticas: str
     nivel_riesgo_contractual: str
+
+class ListaOfertasEvaluadas(BaseModel):
+    ofertas: List[ItemOfertaEvaluada]
 
 class ItemAdjudicacion(BaseModel):
     producto: str
@@ -108,7 +117,6 @@ class CentralComprasAI:
         df = df.rename(columns=col_map)
         cols = list(df.columns)
 
-        # 1. Detección de Código (SAP usa 'Material', otros 'Código', 'SKU')
         col_cod = None
         for pattern in ["material", "codigo", "cod", "sku", "item"]:
             found = next((c for c in cols if pattern in c and "texto" not in c and "desc" not in c), None)
@@ -116,7 +124,6 @@ class CentralComprasAI:
                 col_cod = found
                 break
 
-        # 2. Detección de Descripción (SAP usa 'Texto breve', otros 'Descripción', 'Artículo')
         col_desc = None
         for pattern in ["texto", "desc", "denominacion", "articulo", "producto", "nombre"]:
             found = next((c for c in cols if pattern in c and c != col_cod), None)
@@ -124,7 +131,6 @@ class CentralComprasAI:
                 col_desc = found
                 break
 
-        # 3. Cantidad, Unidad, Precio y Total
         col_cant = next((c for c in cols if any(k in c for k in ["cant", "peso", "volumen", "qty"])), None)
         col_um = next((c for c in cols if any(k in c for k in ["und", "um", "unidad", "medida"])), None)
         col_precio = next((c for c in cols if any(k in c for k in ["precio", "costo", "unitario", "val_unit", "neto"])), None)
@@ -133,7 +139,6 @@ class CentralComprasAI:
         if not col_desc and not col_cod:
             raise ValueError("No se encontraron columnas de Código (Material) ni de Descripción (Texto breve).")
 
-        # Si falta descripción o código, usar el otro como respaldo
         if not col_desc:
             col_desc = col_cod
         if not col_cod:
@@ -145,7 +150,6 @@ class CentralComprasAI:
         df = df.dropna(subset=[col_cant]).copy()
         df[col_cant] = pd.to_numeric(df[col_cant], errors="coerce").fillna(0)
 
-        # Normalización de volumen a TM
         def convertir_a_tm(row):
             um = str(row[col_um]).lower() if col_um and pd.notna(row[col_um]) else "kg"
             cant = row[col_cant]
@@ -155,12 +159,10 @@ class CentralComprasAI:
                 return cant / 1000.0
             elif "tm" in um or "ton" in um:
                 return cant
-            # Si son unidades/piezas (como clamshells/tapas), mantener conteo / 1000 como referencia de millares
             return cant / 1000.0
 
         df["volumen_tm"] = df.apply(convertir_a_tm, axis=1)
 
-        # Cálculo de gasto
         if col_total and col_total in df.columns:
             df["gasto_usd"] = pd.to_numeric(df[col_total], errors="coerce").fillna(0)
         else:
@@ -175,7 +177,6 @@ class CentralComprasAI:
                     return cant * p
             df["gasto_usd"] = df.apply(calcular_gasto, axis=1)
 
-        # Agrupar por Código de Material y Descripción exacta
         group_cols = [col_cod, col_desc] if col_cod != col_desc else [col_desc]
         resumen = df.groupby(group_cols).agg(
             volumen_total_comprado_tm=("volumen_tm", "sum"),
@@ -206,8 +207,8 @@ class CentralComprasAI:
         - Identifica el estado_fisico ('solido', 'liquido' o 'unidad').
         - Convierte a KG o unidades correspondientes.
         """
-        pedidos_json = self._invocar_gemini_schema(prompt_agente1, pedidos_crudos, List[ItemDemanda])
-        df_pedidos = pd.DataFrame(pedidos_json)
+        pedidos_dict = self._invocar_gemini_schema(prompt_agente1, pedidos_crudos, ListaDemanda)
+        df_pedidos = pd.DataFrame(pedidos_dict.get("pedidos", []))
 
         resumen_demanda = df_pedidos.groupby(["producto_estandarizado", "concentracion_o_grado", "estado_fisico"]).agg(
             Volumen_Total_KG=("volumen_total_kg", "sum"),
@@ -228,8 +229,8 @@ class CentralComprasAI:
         - Fija precio techo y objetivo considerando escala de volumen.
         """
         ctx_estratega = f"DEMANDA:\n{demanda_compacta}\nHISTÓRICO_CON_PPP:\n{hist_compacto}"
-        estrategia_json = self._invocar_gemini_schema(prompt_agente2, ctx_estratega, List[ItemEstrategia])
-        df_estrategia = pd.DataFrame(estrategia_json)
+        estrategia_dict = self._invocar_gemini_schema(prompt_agente2, ctx_estratega, ListaEstrategia)
+        df_estrategia = pd.DataFrame(estrategia_dict.get("estrategias", []))
 
         time.sleep(1)
 
@@ -251,8 +252,8 @@ class CentralComprasAI:
         for pdf in archivos_pdf:
             ctx_evaluador.append(types.Part.from_bytes(data=pdf["bytes"], mime_type="application/pdf"))
 
-        proformas_json = self._invocar_gemini_schema(prompt_agente3, ctx_evaluador, List[ItemOfertaEvaluada])
-        df_proformas = pd.DataFrame(proformas_json)
+        proformas_dict = self._invocar_gemini_schema(prompt_agente3, ctx_evaluador, ListaOfertasEvaluadas)
+        df_proformas = pd.DataFrame(proformas_dict.get("ofertas", []))
 
         time.sleep(1)
 
