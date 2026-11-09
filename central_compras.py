@@ -13,7 +13,9 @@ class ItemDemanda(BaseModel):
     agricultor: str = Field(description="Nombre del productor o fundo")
     fundo: str = Field(description="Ubicación o fundo")
     producto_solicitado: str
-    producto_estandarizado: str
+    producto_estandarizado: str = Field(description="Nombre estandarizado incluyendo concentración química y forma física")
+    concentracion_o_grado: str = Field(description="Grado NPK o % de pureza/riqueza, ej: 46% N, 40% N, 15% N")
+    estado_fisico: str = Field(description="solido o liquido")
     cantidad_original: float
     unidad_original: str
     volumen_total_kg: float
@@ -21,6 +23,7 @@ class ItemDemanda(BaseModel):
 class ItemEstrategia(BaseModel):
     codigo_historico: Optional[str] = Field(default="N/A", description="Código de artículo histórico del ERP si coincide")
     producto: str
+    concentracion: str
     volumen_tm: float
     ppp_historico_usd_tm: float
     precio_objetivo_usd_tm: float
@@ -33,6 +36,7 @@ class ItemOfertaEvaluada(BaseModel):
     producto: str
     codigo_erp_mapeado: Optional[str] = Field(default="N/A", description="Código del producto histórico reconocido")
     producto_historico_relacionado: Optional[str] = Field(default="", description="Nombre con el que figuraba en el histórico")
+    concentracion_detectada: str
     presentacion_cotizada: str
     precio_original_cotizado: str
     precio_ofertado_usd_tm: float
@@ -48,6 +52,7 @@ class ItemOfertaEvaluada(BaseModel):
 
 class ItemAdjudicacion(BaseModel):
     producto: str
+    concentracion: str
     volumen_tm: float
     proveedor_ganador: str
     precio_final_usd_tm: float
@@ -98,14 +103,9 @@ class CentralComprasAI:
 
     @staticmethod
     def calcular_ppp_desde_excel(file_bytes) -> pd.DataFrame:
-        """
-        Lee el Excel histórico de compras y calcula el PPP exacto ponderado por volumen en TM.
-        Busca columnas típicas: código, descripción/producto, cantidad, unidad y precio unitario o total.
-        """
         df = pd.read_excel(file_bytes)
         df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
 
-        # Mapeo flexible de nombres de columnas
         col_cod = next((c for c in df.columns if any(k in c for k in ["cod", "sku", "item"])), None)
         col_desc = next((c for c in df.columns if any(k in c for k in ["desc", "prod", "articulo", "material"])), None)
         col_cant = next((c for c in df.columns if any(k in c for k in ["cant", "peso", "volumen", "qty"])), None)
@@ -116,11 +116,9 @@ class CentralComprasAI:
         if not col_desc or (not col_precio and not col_total) or not col_cant:
             raise ValueError("El archivo Excel debe contener al menos columnas de Descripción/Producto, Cantidad y Precio/Total.")
 
-        # Limpieza de nulos
         df = df.dropna(subset=[col_desc, col_cant]).copy()
         df[col_cant] = pd.to_numeric(df[col_cant], errors="coerce").fillna(0)
 
-        # Conversión a Toneladas Métricas (TM) según unidad
         def convertir_a_tm(row):
             um = str(row[col_um]).lower() if col_um and pd.notna(row[col_um]) else "kg"
             cant = row[col_cant]
@@ -134,7 +132,6 @@ class CentralComprasAI:
 
         df["volumen_tm"] = df.apply(convertir_a_tm, axis=1)
 
-        # Cálculo del gasto total por compra
         if col_total and col_total in df.columns:
             df["gasto_usd"] = pd.to_numeric(df[col_total], errors="coerce").fillna(0)
         else:
@@ -143,16 +140,14 @@ class CentralComprasAI:
                 um = str(row[col_um]).lower() if col_um and pd.notna(row[col_um]) else "kg"
                 p = row["precio_num"]
                 cant = row[col_cant]
-                # Si el precio unitario era por saco de 50kg o por kg
                 if "tm" in um or "ton" in um:
                     return row["volumen_tm"] * p
                 elif "saco" in um or "bolsa" in um:
                     return cant * p
-                else: # asume kg
+                else:
                     return cant * p
             df["gasto_usd"] = df.apply(calcular_gasto, axis=1)
 
-        # Agrupación y cálculo del Precio Promedio Ponderado (PPP)
         group_cols = [col_desc]
         if col_cod:
             group_cols.insert(0, col_cod)
@@ -162,11 +157,9 @@ class CentralComprasAI:
             gasto_total_acumulado_usd=("gasto_usd", "sum")
         ).reset_index()
 
-        # Evitar división por cero
         resumen = resumen[resumen["volumen_total_comprado_tm"] > 0].copy()
         resumen["ppp_historico_usd_tm"] = (resumen["gasto_total_acumulado_usd"] / resumen["volumen_total_comprado_tm"]).round(2)
 
-        # Renombrar columnas estandarizadas
         nombres_finales = {
             col_desc: "descripcion_historica",
             "volumen_total_comprado_tm": "volumen_historico_tm",
@@ -185,12 +178,21 @@ class CentralComprasAI:
             archivos_pdf = []
         self.total_tokens_consumidos = 0
 
-        # 1. Agente Consolidador
-        prompt_agente1 = "Consolidador Agro: normaliza pedidos informales, estandariza fertilizantes comerciales y calcula volumen_total_kg (1 saco=50kg, 1TM=1000kg)."
+        # 1. Agente Consolidador con Regla de Concentración Química
+        prompt_agente1 = """
+        Consolidador Agroindustrial Experto:
+        REGLA DE ORO DE CONCENTRACIÓN QUÍMICA:
+        - NUNCA agrupes insumos bajo un nombre genérico si su concentración (%) o grado NPK difiere.
+        - Ejemplo: 'Urea 46%', 'Urea 40%' y 'Urea 15%' son PRODUCTOS DIFERENTES. Jamás los sumes en un mismo SKU.
+        - Refleja siempre la concentración en el campo 'concentracion_o_grado' y en 'producto_estandarizado'.
+        - Identifica el estado_fisico ('solido' o 'liquido').
+        - Convierte sólidos a KG (1 saco/bolsa = 50 kg, 1 TM = 1000 kg).
+        """
         pedidos_json = self._invocar_gemini_schema(prompt_agente1, pedidos_crudos, List[ItemDemanda])
         df_pedidos = pd.DataFrame(pedidos_json)
 
-        resumen_demanda = df_pedidos.groupby("producto_estandarizado").agg(
+        # Agrupación estricta por producto y concentración
+        resumen_demanda = df_pedidos.groupby(["producto_estandarizado", "concentracion_o_grado", "estado_fisico"]).agg(
             Volumen_Total_KG=("volumen_total_kg", "sum"),
             Nro_Pedidos=("agricultor", "count")
         ).reset_index()
@@ -198,30 +200,33 @@ class CentralComprasAI:
 
         time.sleep(1)
 
-        # 2. Agente Estratega (Cruza con Histórico PPP)
+        # 2. Agente Estratega
         df_hist = pd.DataFrame(data_historica)
-        demanda_compacta = resumen_demanda[['producto_estandarizado', 'Volumen_Total_TM']].to_csv(index=False, sep="|")
+        demanda_compacta = resumen_demanda[['producto_estandarizado', 'concentracion_o_grado', 'Volumen_Total_TM']].to_csv(index=False, sep="|")
         hist_compacto = df_hist.to_csv(index=False, sep="|")
         
-        prompt_agente2 = (
-            "Estratega Sourcing: cruza la demanda con el histórico PPP (USD/TM). Reconoce sinónimos o nombres similares. "
-            "Asocia el codigo_historico correspondiente del ERP. Fija precio techo (máximo admisible) y precio objetivo por volumen."
-        )
+        prompt_agente2 = """
+        Estratega de Compras Agro: Cruza demanda e histórico PPP (USD/TM).
+        - Empareja únicamente si la concentración química y grado coinciden rigurosamente.
+        - Fija precio techo (máximo admisible) y objetivo considerando escala de volumen.
+        """
         ctx_estratega = f"DEMANDA:\n{demanda_compacta}\nHISTÓRICO_CON_PPP:\n{hist_compacto}"
         estrategia_json = self._invocar_gemini_schema(prompt_agente2, ctx_estratega, List[ItemEstrategia])
         df_estrategia = pd.DataFrame(estrategia_json)
 
         time.sleep(1)
 
-        # 3. Agente Evaluador y Auditor Legal (Mapea sinónimos de proformas contra histórico)
-        techo_compacto = df_estrategia[['codigo_historico', 'producto', 'precio_techo_usd_tm', 'precio_objetivo_usd_tm']].to_csv(index=False, sep="|")
-        prompt_agente3 = (
-            "Evaluador Técnico-Legal: homologa precios de proformas a USD/TM (saco 50kg * 20). "
-            "Reconoce sinónimos o marcas comerciales y mapea al 'codigo_erp_mapeado' y 'producto_historico_relacionado'. "
-            "Evalúa si el precio es ADMISIBLE vs techo, audita penalidades/moras, logística y asigna nivel_riesgo_contractual (BAJO, MEDIO, ALTO)."
-        )
+        # 3. Agente Evaluador y Auditor Legal
+        techo_compacto = df_estrategia[['codigo_historico', 'producto', 'concentracion', 'precio_techo_usd_tm', 'precio_objetivo_usd_tm']].to_csv(index=False, sep="|")
+        prompt_agente3 = """
+        Evaluador Técnico-Legal:
+        - Homologa precios de proformas a USD/TM (saco 50kg * 20).
+        - Verifica que la cotización oferte EXACTAMENTE la concentración solicitada (ej. si pedimos Urea 46%, una oferta de Urea 15% o 40% no debe homologarse al mismo SKU).
+        - Extrae 'concentracion_detectada'.
+        - Audita penalidades por sobrestadía, moras, tolerancias y logística. Asigna nivel_riesgo_contractual (BAJO, MEDIO, ALTO).
+        """
         
-        ctx_evaluador = [f"CATALOGO_HISTORICO_Y_TECHOS:\n{techo_compacto}"]
+        ctx_evaluador = [f"CATALOGO_TECHOS_CON_CONCENTRACION:\n{techo_compacto}"]
         if cotizaciones_crudas.strip():
             ctx_evaluador.append(f"TEXTO:\n{cotizaciones_crudas}")
         if datos_excel.strip():
@@ -235,11 +240,12 @@ class CentralComprasAI:
         time.sleep(1)
 
         # 4. Agente Orquestador (TCO y Dictamen)
-        eval_compacta = df_proformas[['proveedor', 'producto', 'codigo_erp_mapeado', 'precio_ofertado_usd_tm', 'nivel_riesgo_contractual', 'penalidades_y_moras']].to_csv(index=False, sep="|")
-        prompt_agente4 = (
-            "Director Compras TCO: adjudica balanceando menor costo total y mitigación de riesgo. "
-            "Si la oferta más económica tiene riesgo ALTO por penalidades, adjudica al siguiente postor y documenta el blindaje de la OC."
-        )
+        eval_compacta = df_proformas[['proveedor', 'producto', 'concentracion_detectada', 'codigo_erp_mapeado', 'precio_ofertado_usd_tm', 'nivel_riesgo_contractual', 'penalidades_y_moras']].to_csv(index=False, sep="|")
+        prompt_agente4 = """
+        Director Compras TCO: Adjudica por producto y concentración.
+        - Mitiga riesgos: si el menor precio tiene riesgo ALTO por penalidades abusivas, adjudica al siguiente postor seguro.
+        - Redacta condiciones de blindaje para la Orden de Compra.
+        """
         ctx_orquestador = f"DEMANDA:\n{demanda_compacta}\nEVALUACION:\n{eval_compacta}"
         resultado_adjudicacion = self._invocar_gemini_schema(prompt_agente4, ctx_orquestador, ResultadoLicitacion)
 
