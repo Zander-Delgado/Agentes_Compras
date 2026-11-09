@@ -182,4 +182,53 @@ if st.button(f"🚀 Ejecutar Licitación de {categoria_seleccionada}", type="pri
                                 "bytes": arch.read()
                             })
                         elif nombre.endswith((".xlsx", ".xls")):
-                            excel_bytes = io.Bytes
+                            excel_bytes = io.BytesIO(arch.read())
+                            xls = pd.ExcelFile(excel_bytes)
+                            for sheet_name in xls.sheet_names:
+                                df_sheet = pd.read_excel(xls, sheet_name=sheet_name)
+                                df_sheet = df_sheet.dropna(how="all").dropna(axis=1, how="all")
+                                if not df_sheet.empty:
+                                    texto_acumulado_excel += f"[Hoja:{sheet_name}]\n"
+                                    texto_acumulado_excel += df_sheet.to_csv(index=False, sep="|") + "\n"
+
+                reporte = servicio.ejecutar_licitacion_completa(
+                    pedidos_crudos=texto_demanda_final,
+                    data_historica=hist_dict,
+                    cotizaciones_crudas=texto_ofertas_enviar,
+                    archivos_pdf=lista_pdf_bytes,
+                    datos_excel=texto_acumulado_excel
+                )
+                
+                ahorro = reporte["ahorro_total_usd"]
+                tokens_usados = reporte.get("total_tokens_usados", 0)
+                st.success(f"✅ Licitación de {categoria_seleccionada} completada exitosamente.")
+                
+                col_metric, col_tokens, col_riesgo = st.columns([1, 1, 2])
+                col_metric.metric("Ahorro Total Consolidado", f"${ahorro:,.2f} USD")
+                col_tokens.metric("Tokens Consumidos", f"{tokens_usados:,}")
+                col_riesgo.info(f"🛡️ **Dictamen de Riesgo & TCO:**\n{reporte['dictamen_riesgo']}")
+
+                res_tab1, res_tab2, res_tab3, res_tab4 = st.tabs([
+                    "🏆 Adjudicación y Blindaje O.C.",
+                    "📑 Matriz de Proformas y Homologación ERP",
+                    "📊 Estrategia de Precios Techo vs PPP",
+                    "📦 Demanda Consolidada"
+                ])
+                
+                with res_tab1:
+                    st.dataframe(reporte["adjudicacion"], use_container_width=True)
+                    st.subheader("📧 Comunicación de Adjudicación y Condiciones")
+                    st.text_input("Asunto:", value=reporte["comunicacion_cierre"]["asunto"], disabled=True)
+                    st.text_area("Cuerpo del Correo / O.C.:", value=reporte["comunicacion_cierre"]["cuerpo_correo"], height=180)
+
+                with res_tab2:
+                    st.dataframe(reporte["cuadro_comparativo"], use_container_width=True)
+
+                with res_tab3:
+                    st.dataframe(reporte["estrategia_precios"], use_container_width=True)
+
+                with res_tab4:
+                    st.dataframe(reporte["demanda_consolidada"], use_container_width=True)
+
+            except Exception as e:
+                st.error(f"Error durante la ejecución del pipeline: {e}")
